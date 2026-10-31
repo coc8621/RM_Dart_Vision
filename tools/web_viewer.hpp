@@ -42,8 +42,9 @@ public:
     /**
      * @param port         HTTP 监听端口
      * @param jpeg_quality JPEG 编码质量 (1-100)
+     * @param max_fps      每路网页视频的最大发送帧率，>0
      */
-    explicit WebViewer(int port = 8080, int jpeg_quality = 80);
+    explicit WebViewer(int port = 8080, int jpeg_quality = 80, int max_fps = 30);
     ~WebViewer();
 
     WebViewer(const WebViewer&) = delete;
@@ -54,19 +55,25 @@ public:
     void createTrackbar(const std::string& trackbarname, const std::string& winname,
                         int* value, int count,
                         TrackbarCallback onChange = nullptr,
-                        void* userdata = nullptr);
+                        void* userdata = nullptr, int min_value = 0);
+    void setParameterActions(std::function<void()> save, std::function<void()> restore);
+    void addParameterActions(std::function<void()> save, std::function<void()> restore);
+    struct SliderState {
+        double value = 0, minimum = 0, maximum = 1, step = 0.01;
+        bool enabled = true;
+        std::string reason, unit;
+    };
+    void createDynamicTrackbar(const std::string& name, const std::string& window,
+                              std::function<SliderState()> read,
+                              std::function<void(double)> write);
 
-    /**
-     * @brief 等待键盘输入
-     * @param delay_ms 超时毫秒数，0 表示永久阻塞直到按键
-     * @return 按键 ASCII 码，超时返回 -1
-     */
     int waitKey(int delay_ms = 0);
 
     void destroyWindow(const std::string& winname);
     void destroyAllWindows();
 
     int port() const { return port_; }
+    void setMaxFps(int max_fps);
 
 private:
     void server_loop();
@@ -76,11 +83,15 @@ private:
     void send_mjpeg_stream(int fd, const std::string& window);
     void send_window_list(int fd);
     void send_trackbar_list(int fd);
+    void handle_parameter_action(int fd, bool save);
     void send_response(int fd, int code, const std::string& content_type,
                        const std::string& body);
 
     int port_;
     int jpeg_quality_;
+    std::atomic<int> max_fps_{10};
+    std::function<void()> save_parameters_;
+    std::function<void()> restore_parameters_;
     int server_fd_ = -1;
     std::atomic<bool> running_{false};
     std::thread server_thread_;
@@ -100,6 +111,9 @@ private:
         int max_val;
         TrackbarCallback onChange;
         void* userdata;
+        int min_val;
+        std::function<SliderState()> read;
+        std::function<void(double)> write;
     };
     std::vector<TrackbarData> trackbars_;
     std::mutex tb_mtx_;

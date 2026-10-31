@@ -45,6 +45,7 @@ public:
     bool recordEnabled() const { return record_; }
 
     bool useRoi() const { return use_roi_; }
+    void setupCameraTrackbars(tools::WebViewer& viewer);
 
     const TraditionalDetector* tradDetector() const {
         return dynamic_cast<const TraditionalDetector*>(detector_.get());
@@ -73,6 +74,8 @@ private:
     bool   use_roi_ = false;
     bool   is_startup_ = true;
     std::string detector_type_;
+    std::string config_path_;
+    double configured_exposure_ms_ = 0.0, configured_gain_ = 0.0;
 
     static constexpr double kHalfWidth_ = 640.0 / 2.0;   
 };

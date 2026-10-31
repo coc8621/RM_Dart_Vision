@@ -3,6 +3,8 @@
 #include <libusb-1.0/libusb.h>
 
 #include <stdexcept>
+#include <cmath>
+#include <algorithm>
 
 #include "tools/logger.hpp"
 
@@ -10,9 +12,10 @@ using namespace std::chrono_literals;
 
 namespace io
 {
-MindVision::MindVision(double exposure_ms, double gamma, const std::string & vid_pid)
+MindVision::MindVision(double exposure_ms, double gamma, const std::string & vid_pid, double gain)
 : exposure_ms_(exposure_ms),
   gamma_(gamma),
+  gain_(gain),
   handle_(-1),
   quit_(false),
   ok_(false),
@@ -61,6 +64,8 @@ void MindVision::read(cv::Mat & img, std::chrono::steady_clock::time_point & tim
 
 void MindVision::open()
 {
+  std::lock_guard<std::mutex> lock(settings_mutex_);
+  settings_ready_ = false;
   int camera_num = 1;
   tSdkCameraDevInfo camera_info_list;
   tSdkCameraCapbility camera_capbility;
@@ -78,12 +83,14 @@ void MindVision::open()
 
   CameraSetAeState(handle_, FALSE);                        // 关闭自动曝光
   CameraSetExposureTime(handle_, exposure_ms_ * 1e3);      // 设置曝光
+  if (gain_ >= 0) CameraSetAnalogGainX(handle_, static_cast<float>(gain_));
   CameraSetGamma(handle_, gamma_ * 1e2);                   // 设置伽马
   CameraSetIspOutFormat(handle_, CAMERA_MEDIA_TYPE_BGR8);  // 设置输出格式为BGR
   CameraSetTriggerMode(handle_, 0);                        // 设置为连续采集模式
   CameraSetFrameSpeed(handle_, 1);                         // 设置为低帧率模式
 
   CameraPlay(handle_);
+  settings_ready_ = true;
 
   // 取图线程
   capture_thread_ = std::thread{[this] {
@@ -126,8 +133,69 @@ void MindVision::try_open()
 
 void MindVision::close()
 {
+  std::lock_guard<std::mutex> lock(settings_mutex_);
+  settings_ready_ = false;
   if (handle_ == -1) return;
   CameraUnInit(handle_);
+  handle_ = -1;
+}
+
+CameraParameter MindVision::parameter_unlocked(const std::string & name)
+{
+  const bool exposure = name == "exposure_ms";
+  if (!exposure && name != "gain") throw std::invalid_argument("Unknown camera parameter");
+  CameraParameter result;
+  result.value = exposure ? exposure_ms_ : std::max(0.0, gain_);
+  result.maximum = std::max(1.0, result.value);
+  result.unit = exposure ? "ms" : "倍";
+  if (!settings_ready_) return result;
+  int range_status, value_status;
+  if (exposure) {
+    double value, minimum, maximum, step;
+    range_status = CameraGetExposureTimeRange(handle_, &minimum, &maximum, &step);
+    value_status = CameraGetExposureTime(handle_, &value);
+    if (range_status == CAMERA_STATUS_SUCCESS && value_status == CAMERA_STATUS_SUCCESS) {
+      result.value = value / 1000.0;
+      result.minimum = minimum / 1000.0;
+      result.maximum = maximum / 1000.0;
+      result.step = std::max(0.001, step / 1000.0);
+    }
+  } else {
+    float value, minimum, maximum, step;
+    range_status = CameraGetAnalogGainXRange(handle_, &minimum, &maximum, &step);
+    value_status = CameraGetAnalogGainX(handle_, &value);
+    if (range_status == CAMERA_STATUS_SUCCESS && value_status == CAMERA_STATUS_SUCCESS) {
+      result.value = value;
+      result.minimum = minimum;
+      result.maximum = maximum;
+      result.step = step > 0 ? step : 0.01;
+    }
+  }
+  result.enabled = range_status == CAMERA_STATUS_SUCCESS && value_status == CAMERA_STATUS_SUCCESS;
+  result.reason = result.enabled ? "" : "无法读取相机参数范围";
+  return result;
+}
+
+CameraParameter MindVision::parameter(const std::string & name)
+{
+  std::lock_guard<std::mutex> lock(settings_mutex_);
+  return parameter_unlocked(name);
+}
+
+void MindVision::setParameter(const std::string & name, double value)
+{
+  std::lock_guard<std::mutex> lock(settings_mutex_);
+  const auto info = parameter_unlocked(name);
+  if (!info.enabled) throw std::runtime_error(info.reason);
+  if (!std::isfinite(value) || value < info.minimum || value > info.maximum)
+    throw std::invalid_argument("Camera parameter outside supported range");
+  const bool exposure = name == "exposure_ms";
+  const int ret = exposure ? CameraSetExposureTime(handle_, value * 1000.0)
+                           : CameraSetAnalogGainX(handle_, static_cast<float>(value));
+  if (ret != CAMERA_STATUS_SUCCESS)
+    throw std::runtime_error("Camera rejected parameter: " + std::to_string(ret));
+  if (exposure) exposure_ms_ = value;
+  else gain_ = value;
 }
 
 void MindVision::set_vid_pid(const std::string & vid_pid)

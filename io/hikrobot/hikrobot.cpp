@@ -3,6 +3,8 @@
 #include <libusb-1.0/libusb.h>
 
 #include <algorithm>
+#include <cmath>
+#include <stdexcept>
 
 #include "tools/logger.hpp"
 
@@ -58,6 +60,8 @@ void HikRobot::read(cv::Mat & img, std::chrono::steady_clock::time_point & times
 
 void HikRobot::capture_start()
 {
+  std::lock_guard<std::mutex> lock(settings_mutex_);
+  settings_ready_ = false;
   capturing_ = false;
   capture_quit_ = false;
 
@@ -130,6 +134,7 @@ void HikRobot::capture_start()
     tools::logger()->warn("MV_CC_StartGrabbing failed: {:#x}", ret);
     return;
   }
+  settings_ready_ = true;
 
   {
     MVCC_INTVALUE_EX w{}, h{};
@@ -206,28 +211,76 @@ void HikRobot::capture_start()
 
 void HikRobot::capture_stop()
 {
+  std::lock_guard<std::mutex> lock(settings_mutex_);
+  settings_ready_ = false;
   capture_quit_ = true;
   if (capture_thread_.joinable()) capture_thread_.join();
+
+  if (!handle_) return;
 
   unsigned int ret;
 
   ret = MV_CC_StopGrabbing(handle_);
   if (ret != MV_OK) {
     tools::logger()->warn("MV_CC_StopGrabbing failed: {:#x}", ret);
-    return;
   }
 
   ret = MV_CC_CloseDevice(handle_);
   if (ret != MV_OK) {
     tools::logger()->warn("MV_CC_CloseDevice failed: {:#x}", ret);
-    return;
   }
 
   ret = MV_CC_DestroyHandle(handle_);
   if (ret != MV_OK) {
     tools::logger()->warn("MV_CC_DestroyHandle failed: {:#x}", ret);
-    return;
   }
+  handle_ = nullptr;
+}
+
+CameraParameter HikRobot::parameter_unlocked(const std::string & name)
+{
+  const bool exposure = name == "exposure_ms";
+  if (!exposure && name != "gain") throw std::invalid_argument("Unknown camera parameter");
+  CameraParameter result;
+  result.value = exposure ? exposure_us_ / 1000.0 : gain_;
+  result.maximum = std::max(1.0, result.value);
+  result.unit = exposure ? "ms" : "dB";
+  if (!settings_ready_) return result;
+  MVCC_FLOATVALUE info{};
+  if (MV_CC_GetFloatValue(handle_, exposure ? "ExposureTime" : "Gain", &info) != MV_OK) {
+    result.reason = "无法读取相机参数范围";
+    return result;
+  }
+  const double scale = exposure ? 1000.0 : 1.0;
+  result.value = info.fCurValue / scale;
+  result.minimum = info.fMin / scale;
+  result.maximum = info.fMax / scale;
+  result.step = exposure ? 0.001 : 0.01;
+  result.enabled = true;
+  result.reason.clear();
+  return result;
+}
+
+CameraParameter HikRobot::parameter(const std::string & name)
+{
+  std::lock_guard<std::mutex> lock(settings_mutex_);
+  return parameter_unlocked(name);
+}
+
+void HikRobot::setParameter(const std::string & name, double value)
+{
+  std::lock_guard<std::mutex> lock(settings_mutex_);
+  const auto info = parameter_unlocked(name);
+  if (!info.enabled) throw std::runtime_error(info.reason);
+  if (!std::isfinite(value) || value < info.minimum || value > info.maximum)
+    throw std::invalid_argument("Camera parameter outside supported range");
+  const bool exposure = name == "exposure_ms";
+  const int ret = MV_CC_SetFloatValue(handle_, exposure ? "ExposureTime" : "Gain",
+                                     value * (exposure ? 1000.0 : 1.0));
+  if (ret != MV_OK) throw std::runtime_error("Camera rejected parameter: " + std::to_string(ret));
+  // 断线重连时继续使用最后一次成功设置的值。
+  if (exposure) exposure_us_ = value * 1000.0;
+  else gain_ = value;
 }
 
 void HikRobot::set_float_value(const std::string & name, double value)

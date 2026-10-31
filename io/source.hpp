@@ -13,6 +13,7 @@ class ImageSource {
 public:
     virtual ~ImageSource() = default;
     virtual void read(cv::Mat &img, std::chrono::steady_clock::time_point &timestamp) = 0;
+    virtual Camera* camera() { return nullptr; }
 };
 
 class CameraSource : public ImageSource {
@@ -24,6 +25,7 @@ public:
     void read(cv::Mat &img, std::chrono::steady_clock::time_point &timestamp) override {
         camera_->read(img, timestamp);
     }
+    Camera* camera() override { return camera_.get(); }
 
 private:
     std::unique_ptr<io::Camera> camera_;

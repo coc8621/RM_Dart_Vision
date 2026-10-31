@@ -6,6 +6,7 @@
 #include "tasks/light_detect/Tracker.hpp"
 #include "tools/web_viewer.hpp"
 #include "tools/yaml.hpp"
+#include <algorithm>
 #include <string>
 #include <vector>
 
@@ -15,7 +16,10 @@ public:
         : viewer_(port)
     {
         auto yaml = tools::load(config_path);
+        viewer_.setMaxFps(yaml["web_viewer_fps"].as<int>(10));
         debug_ = yaml["debug"].as<bool>();
+        roi_border_ = yaml["use_roi"].as<bool>() &&
+                      yaml["detector"].as<std::string>() == "tradition";
     }
 
     void setupWindows(bool debug, bool use_trackbar, const std::string& detector_type,
@@ -36,9 +40,11 @@ public:
         constexpr int kCanvasW = 640, kCanvasH = 480;
         cv::Mat display_img = cv::Mat::zeros(kCanvasH, kCanvasW, CV_8UC3);  // 黑色底
 
-        double scale = std::min((double)kCanvasW / frame.cols, (double)kCanvasH / frame.rows);
-        int dst_w = static_cast<int>(frame.cols * scale);
-        int dst_h = static_cast<int>(frame.rows * scale);
+        const int padding = roi_border_ ? kRoiBorder : 0;
+        double scale = std::min((double)(kCanvasW - 2 * padding) / frame.cols,
+                                (double)(kCanvasH - 2 * padding) / frame.rows);
+        int dst_w = std::max(1, static_cast<int>(frame.cols * scale));
+        int dst_h = std::max(1, static_cast<int>(frame.rows * scale));
         int off_x = (kCanvasW - dst_w) / 2;
         int off_y = (kCanvasH - dst_h) / 2;
         cv::Mat scaled;
@@ -82,6 +88,10 @@ public:
 
         // 中线（画布中心）
         cv::line(display_img, cv::Point(kCanvasW / 2, 0), cv::Point(kCanvasW / 2, kCanvasH), cv::Scalar(0, 0, 255), 2);
+
+        // ROI开启时在实际裁剪图外围加白边
+        addRoiBorder(display_img, cv::Rect(off_x, off_y, dst_w, dst_h));
+ 
         viewer_.imshow("Camera Image", display_img);
     }
 
@@ -97,14 +107,17 @@ public:
         } else {
             bir3 = bir_img;
         }
-        double scale = std::min((double)kCanvasW / bir3.cols, (double)kCanvasH / bir3.rows);
-        int dst_w = static_cast<int>(bir3.cols * scale);
-        int dst_h = static_cast<int>(bir3.rows * scale);
+        const int padding = roi_border_ ? kRoiBorder : 0;
+        double scale = std::min((double)(kCanvasW - 2 * padding) / bir3.cols,
+                                (double)(kCanvasH - 2 * padding) / bir3.rows);
+        int dst_w = std::max(1, static_cast<int>(bir3.cols * scale));
+        int dst_h = std::max(1, static_cast<int>(bir3.rows * scale));
         int off_x = (kCanvasW - dst_w) / 2;
         int off_y = (kCanvasH - dst_h) / 2;
         cv::Mat scaled;
         cv::resize(bir3, scaled, cv::Size(dst_w, dst_h));
         scaled.copyTo(display_img(cv::Rect(off_x, off_y, dst_w, dst_h)));
+        addRoiBorder(display_img, cv::Rect(off_x, off_y, dst_w, dst_h));
         viewer_.imshow("Binary Image", display_img);
     }
 
@@ -114,6 +127,20 @@ public:
     bool debug() const { return debug_; }
 
 private:
+    void addRoiBorder(cv::Mat& canvas, const cv::Rect& image_bounds) const {
+        if (!roi_border_) return;
+        // 白边放在实际裁剪图的外围，保留图像最外圈像素
+        cv::Mat framed;
+        cv::copyMakeBorder(canvas(image_bounds), framed,
+                           kRoiBorder, kRoiBorder, kRoiBorder, kRoiBorder,
+                           cv::BORDER_CONSTANT | cv::BORDER_ISOLATED, cv::Scalar(255, 255, 255));
+        framed.copyTo(canvas(cv::Rect(image_bounds.x - kRoiBorder,
+                                     image_bounds.y - kRoiBorder,
+                                     framed.cols, framed.rows)));
+    }
+
+    static constexpr int kRoiBorder = 3;
+    bool roi_border_ = false;
     tools::WebViewer viewer_;
     bool debug_ = false;
 };

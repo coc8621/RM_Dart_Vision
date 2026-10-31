@@ -1,4 +1,4 @@
-# 基于同济大学sp_vision框架镖架制导
+# 基于sp_vision框架镖架制导
 
 ## 实现内容
 - [x] opencv稳定识别绿灯并发送像素差
@@ -15,7 +15,7 @@
 ##  编译
 ```bash
 cmake -B build
-make -C build/ -j 4   
+make -C build/ -j 4  # 16个cpu大核：8  8个cpu大核：4
 ```
 ## 运行
 ```bash
@@ -56,13 +56,58 @@ docker exec -it rv_dart_ bash
 pkill -9 -f "standard"
 ```
 
+## 开启目标设备 Wi-Fi 热点（可选）
+
+### 安装依赖
+```bash
+sudo apt-get update
+sudo apt install hostapd isc-dhcp-server
+```
+### 修改脚本
+
+编辑 `hotspot_setup.sh` 中的参数配置：
+
+| 参数 | 默认值 | 说明 |
+| --- | --- | --- |
+| `WLAN_MAC` | `f8:54:f6:c0:6b:6e` | 目标无线网卡的永久MAC，在目标设备输入`ip link show`查看`wlan0`对应MAC |
+| `SSID` | `RK3588` | 手机搜索到的热点名称 |
+| `PASSPHRASE` | `qidianrk3588` | 热点密码 |
+| `HW_MODE` | `a` | 5 GHz 信道 36；改为 `g` 使用 2.4 GHz 信道 6 |
+| `HOTSPOT_IP` | `192.168.4.1` | 热点地址，DHCP 网段随之生成 |
+
+### 运行配置脚本
+```bash
+chmod +x hotspot_setup.sh
+sudo bash hotspot_setup.sh
+```
+
 ## 网页端窗口显示视频流
+
 > 向网页端推送视频流解决了传统的`X11`转发环境依赖高、画面卡顿、自启动时主程序崩溃问题，是特别实用的功能
-- 程序运行时打开浏览器，地址栏输入`http://localhost:8080`，就可在此链接中查看推送的视频流，如果使用ssh连接目标主机后在该主机当中跑程序，把`localhost`替换成目标主机的ip，比如`http://192.168.137.167:8080`
+
+### 将当前主机与目标设备设置在同一个局域网
+#### Wi-Fi 热点无线连接（适用手机、平板）
+
+1. （可选）若目标设备未配置热点，按照“开启目标设备wifi热点”一节配置。
+2. 在手机或平板上连接该热点，热点名称和密码以 `hotspot_setup.sh` 中的 `SSID`、`PASSPHRASE` 为准。默认当前设备`SSID`:**RK3588** `PASSPHRASE`：**qidianrk3588**
+3. 打开浏览器，默认访问地址 `http://192.168.4.1:8080`。该地址对应`HOTSPOT_IP`
+
+#### 网线有线连接（适用笔记本）
+
+1. 用网线连接笔记本和目标设备，并确保双方的有线网卡 IP 位于同一网段。
+2. 在笔记本浏览器中访问目标设备的**有线网卡 IP**，例如 `http://192.168.137.167:8080`。示例 IP 请替换为实际地址，可在目标设备上执行 `nmap -sn 192.168.137.1/24` 查看对应有线网卡的 IP 地址
+
+### 网页显示内容
+
 - 若在`configs/test.yaml`中`debug: true`，`use_trackbar: false`，网页端只显示识别可视化图像
     ![1.png](/docs/1.png)
-- 若在`configs/test.yaml`中`debug: true`，`use_trackbar: true`，网页端显示识别可视化图像、二值化图像、opencv参数滑条  
+- 若在`configs/test.yaml`中`debug: true`，`use_trackbar: true`，网页端显示识别可视化图像、二值化图像、参数滑条  
+    - 笔记本端
     ![2.png](/docs/2.png)
+    - 手机端
+    <center class ='img'>
+    <img src="/docs/3.png" width = 40%>
+    </center>
 - 使用自启动运行程序时，可在网页端查看可视化结果，也可动态调opencv识别参数
 
 ## 开发实用技巧

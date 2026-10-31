@@ -7,8 +7,13 @@
 #include <cmath>
 #include <algorithm>
 #include <iostream>
+#include <fstream>
+#include <cstdio>
+#include <stdexcept>
+#include <iterator>
 
-TraditionalDetector::TraditionalDetector(const std::string &config_path) {
+TraditionalDetector::TraditionalDetector(const std::string &config_path)
+    : config_path_(config_path) {
     auto yaml = tools::load(config_path);    
     h_min_ = yaml["hsv"]["h_min"].as<int>();
     h_max_ = yaml["hsv"]["h_max"].as<int>();
@@ -47,6 +52,10 @@ TraditionalDetector::TraditionalDetector(const std::string &config_path) {
         track_morph_kernel_size_ = morph_kernel_size_;
         track_dilate_iterations_ = dilate_iterations_;
         track_erode_iterations_ = erode_iterations_;
+        track_roi_x_ = roi_x_;
+        track_roi_y_ = roi_y_;
+        track_roi_width_ = roi_width_;
+        track_roi_height_ = roi_height_;
     }
     morph_kernel_ = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(morph_kernel_size_, morph_kernel_size_));
 }
@@ -54,6 +63,7 @@ TraditionalDetector::TraditionalDetector(const std::string &config_path) {
 std::vector<LightDetect::Light> TraditionalDetector::detect(cv::Mat &src, const cv::Size2d &dst_size, const int &my_color, const bool &startup)
 {
     if (src.empty()) return {};
+    std::lock_guard<std::mutex> lock(parameter_mtx_);
 
     cv::Mat resized;
     cv::Size target_size(static_cast<int>(dst_size.width), static_cast<int>(dst_size.height));
@@ -75,8 +85,8 @@ void TraditionalDetector::preprocess(const cv::Mat &src, cv::Mat &dst,cv::Rect &
     if (use_roi_) {
         auto x = std::max(0, std::min(roi_x_, src.cols - 1));
         auto y = std::max(0, std::min(roi_y_, src.rows - 1));
-        auto w = std::min(roi_width_, src.cols - x);
-        auto h = std::min(roi_height_, src.rows - y);
+        auto w = std::clamp(roi_width_, 1, src.cols - x);
+        auto h = std::clamp(roi_height_, 1, src.rows - y);
         roi_rect = cv::Rect(x, y, w, h);
         cv::Mat roi_frame = src(roi_rect);
         debug_roiimg = roi_frame.clone();   // 供可视化显示ROI裁剪图
@@ -169,6 +179,7 @@ void TraditionalDetector::onTrackbarCallback(int value, void* userdata){
 }
 
 void TraditionalDetector::updateParameters(){
+    std::lock_guard<std::mutex> lock(parameter_mtx_);
     h_min_ = track_h_min_;
     h_max_ = track_h_max_;
     s_min_ = track_s_min_;
@@ -183,11 +194,19 @@ void TraditionalDetector::updateParameters(){
                          track_morph_kernel_size_ + 1 : track_morph_kernel_size_;
     dilate_iterations_ = track_dilate_iterations_;
     erode_iterations_ = track_erode_iterations_;
+    if (use_roi_) {
+        roi_x_ = track_roi_x_;
+        roi_y_ = track_roi_y_;
+        roi_width_ = track_roi_width_;
+        roi_height_ = track_roi_height_;
+    }
     morph_kernel_ = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(morph_kernel_size_, morph_kernel_size_));
 }
 
 void TraditionalDetector::createTrackbars(tools::WebViewer* web_viewer) {
     if (!web_viewer) return;
+    web_viewer->setParameterActions([this] { saveParameters(); },
+                                  [this] { restoreParameters(); });
     web_viewer->namedWindow("Debug Settings");
     // HSV 
     web_viewer->createTrackbar("H Min", "Debug Settings", &track_h_min_, 180, onTrackbarCallback, this);
@@ -205,4 +224,72 @@ void TraditionalDetector::createTrackbars(tools::WebViewer* web_viewer) {
     web_viewer->createTrackbar("Max Area", "Debug Settings", &track_max_area_, 20000, onTrackbarCallback, this);
     web_viewer->createTrackbar("Min Aspect Ratio", "Debug Settings", &track_min_aspect_ratio_, 200, onTrackbarCallback, this);
     web_viewer->createTrackbar("Max Aspect Ratio", "Debug Settings", &track_max_aspect_ratio_, 200, onTrackbarCallback, this);
+    if (use_roi_) {
+        // ROI 坐标基于检测入口缩放后的 640x480 图像；超出右/下边界时裁剪到边界。
+        web_viewer->createTrackbar("roi.x", "Debug Settings", &track_roi_x_, 639, onTrackbarCallback, this);
+        web_viewer->createTrackbar("roi.y", "Debug Settings", &track_roi_y_, 479, onTrackbarCallback, this);
+        web_viewer->createTrackbar("roi.width", "Debug Settings", &track_roi_width_, 640, onTrackbarCallback, this, 1);
+        web_viewer->createTrackbar("roi.height", "Debug Settings", &track_roi_height_, 480, onTrackbarCallback, this, 1);
+    }
+}
+
+namespace {
+struct ParameterBinding {
+    const char* section;
+    const char* key;
+    int* value;
+    int maximum;
+    double scale = 1.0;
+    int minimum = 0;
+};
+std::vector<ParameterBinding> parameterBindings(TraditionalDetector& detector, bool use_roi) {
+    std::vector<ParameterBinding> bindings{
+        {"hsv", "h_min", &detector.track_h_min_, 180}, {"hsv", "h_max", &detector.track_h_max_, 180},
+        {"hsv", "s_min", &detector.track_s_min_, 255}, {"hsv", "s_max", &detector.track_s_max_, 255},
+        {"hsv", "v_min", &detector.track_v_min_, 255}, {"hsv", "v_max", &detector.track_v_max_, 255},
+        {"morphology", "kernel_size", &detector.track_morph_kernel_size_, 15},
+        {"morphology", "dilate_iterations", &detector.track_dilate_iterations_, 10},
+        {"morphology", "erode_iterations", &detector.track_erode_iterations_, 10},
+        {"contour_filter", "min_area", &detector.track_min_area_, 3000},
+        {"contour_filter", "max_area", &detector.track_max_area_, 20000},
+        {"contour_filter", "min_aspect_ratio", &detector.track_min_aspect_ratio_, 200, 100.0},
+        {"contour_filter", "max_aspect_ratio", &detector.track_max_aspect_ratio_, 200, 100.0}
+    };
+    if (use_roi) {
+        bindings.insert(bindings.end(), {
+            {"roi", "x", &detector.track_roi_x_, 639},
+            {"roi", "y", &detector.track_roi_y_, 479},
+            {"roi", "width", &detector.track_roi_width_, 640, 1.0, 1},
+            {"roi", "height", &detector.track_roi_height_, 480, 1.0, 1}
+        });
+    }
+    return bindings;
+}
+}
+
+void TraditionalDetector::saveParameters() {
+    const auto bindings = parameterBindings(*this, use_roi_);
+    std::vector<tools::NumericYamlParameter> parameters;
+    for (const auto& binding : bindings) {
+        double value = *binding.value / binding.scale;
+        if (std::string(binding.key) == "kernel_size") value = *binding.value | 1;
+        parameters.push_back({{binding.section, binding.key}, value});
+    }
+    tools::save_numeric_parameters(config_path_, parameters);
+}
+
+void TraditionalDetector::restoreParameters() {
+    const auto yaml = YAML::LoadFile(config_path_);
+    const auto bindings = parameterBindings(*this, use_roi_);
+    std::vector<int> values(bindings.size());
+    for (size_t i = 0; i < bindings.size(); ++i) {
+        const auto& binding = bindings[i];
+        const double scaled = yaml[binding.section][binding.key].as<double>() * binding.scale;
+        if (!std::isfinite(scaled) || scaled < binding.minimum || scaled > binding.maximum ||
+            std::abs(scaled - std::round(scaled)) > 1e-6)
+            throw std::runtime_error("parameter outside trackbar range");
+        values[i] = static_cast<int>(std::round(scaled));
+    }
+    for (size_t i = 0; i < bindings.size(); ++i) *bindings[i].value = values[i];
+    updateParameters();
 }

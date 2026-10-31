@@ -17,6 +17,7 @@ int main() {
 
     Visualizer viz(8080, config_path);
     viz.setupWindows(debug_, use_trackbar, detector_type, pipeline.tradDetector());
+    pipeline.setupCameraTrackbars(viz.viewer());
 
     auto last = std::chrono::steady_clock::now();
     while (true) {

@@ -10,6 +10,7 @@
 #include <opencv2/opencv.hpp>
 #include <vector>
 #include <string>
+#include <mutex>
 #include "tools/yaml.hpp"
 #include "tools/web_viewer.hpp"
 
@@ -24,6 +25,7 @@ public:
     int track_min_area_,track_max_area_;
     int track_min_aspect_ratio_,track_max_aspect_ratio_;
     int track_morph_kernel_size_,track_dilate_iterations_,track_erode_iterations_;
+    int track_roi_x_, track_roi_y_, track_roi_width_, track_roi_height_;
     cv::Mat debug_birimg;
     cv::Mat debug_roiimg;
     static void onTrackbarCallback(int value, void* userdata);
@@ -31,6 +33,10 @@ public:
     void createTrackbars(tools::WebViewer* viewer);
 
 private:
+    std::string config_path_;
+    void saveParameters();
+    void restoreParameters();
+    std::mutex parameter_mtx_;
     int h_min_, s_min_,v_min_;           
     int h_max_, s_max_,v_max_;                
     int morph_kernel_size_, morph_iterations_;    

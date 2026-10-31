@@ -6,6 +6,7 @@
 #include <opencv2/opencv.hpp>
 #include <string>
 #include <thread>
+#include <mutex>
 
 #include "MvCameraControl.h"
 #include "io/camera.hpp"
@@ -20,6 +21,8 @@ public:
            int camera_width = -1, int camera_height = -1);
   ~HikRobot() override;
   void read(cv::Mat & img, std::chrono::steady_clock::time_point & timestamp) override;
+  CameraParameter parameter(const std::string & name) override;
+  void setParameter(const std::string & name, double value) override;
 
 private:
   struct CameraData
@@ -36,9 +39,12 @@ private:
   std::thread daemon_thread_;
   std::atomic<bool> daemon_quit_;
 
-  void * handle_;
+  void * handle_ = nullptr;
+  std::mutex settings_mutex_;
+  bool settings_ready_ = false;
+  CameraParameter parameter_unlocked(const std::string & name);
   std::thread capture_thread_;
-  std::atomic<bool> capturing_;
+  std::atomic<bool> capturing_{false};
   std::atomic<bool> capture_quit_;
   tools::ThreadSafeQueue<CameraData> queue_;
 

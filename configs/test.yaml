@@ -12,7 +12,8 @@ baud_rate: 115200
 source: video  # camera: 使用摄像头, video: 使用视频
 detector: tradition  # yolo: 使用神经网络识别, tradition: 使用OpenCV识别，rknn:使用rk3588 npu推理
 debug: true    # 开启可视化
-use_trackbar: false   # 开启opencv动态调参
+use_trackbar: true   # 开启opencv动态调参
+web_viewer_fps: 30   # 每路网页视频最大发送帧率
 record: false  # 开启录制
 record_fps: 50  # 录制帧率
 
@@ -53,13 +54,13 @@ contour_filter:
   min_aspect_ratio: 1.00    # 最小长宽比
   max_aspect_ratio: 1.20    # 最大长宽比
 
-use_roi: false
+use_roi: true
 
 roi:           
   x: 0                  
-  y: 100                   
+  y: 0                   
   width: 640               
-  height: 320              
+  height: 480              
 
 gaussian:
   kernel_size: 5           # 高斯核

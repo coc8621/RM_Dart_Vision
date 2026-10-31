@@ -17,7 +17,7 @@ Camera::Camera(const std::string & config_path)
   if (camera_name == "mindvision") {
     auto gamma = tools::read<double>(yaml, "gamma");
     auto vid_pid = tools::read<std::string>(yaml, "vid_pid");
-    camera_ = std::make_unique<MindVision>(exposure_ms, gamma, vid_pid);
+    camera_ = std::make_unique<MindVision>(exposure_ms, gamma, vid_pid, yaml["gain"].as<double>(-1));
   }
 
   else if (camera_name == "hikrobot") {
